@@ -134,6 +134,21 @@ async def build_queries(request: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/queries/feedback")
+async def query_feedback(feedback: dict):
+    """
+    Learn from query performance to improve future rankings
+
+    Expected input:
+    {
+        "query": "site:.com \"hospital\" \"NYC\" \"@gmail.com\"",
+        "emails_found": 25,
+        "quality_score": 8.5,
+        "industry": "healthcare"
+    }
+    """
+
+
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8000))

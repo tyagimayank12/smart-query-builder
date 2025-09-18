@@ -18,91 +18,195 @@ class ClaudeService:
         self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
     async def analyze_industry(self, industry: str, region: str) -> IndustryAnalysis:
-        prompt = f"""Break down the {industry} industry into specific business subtypes and variations.
+        """
+        Deep industry analysis that generates specific business types, not generic terms
+        """
+        prompt = f"""You are a business intelligence expert analyzing the {industry} industry to identify REAL business types.
 
-    Think step by step:
+    Your goal: Break down {industry} into specific business categories that actually exist and operate.
+
+    Think like a business directory expert:
     1. What specific types of businesses operate within {industry}?
-    2. What services do these companies actually offer?
-    3. How do these businesses describe themselves on their websites?
-    4. What technical terms and roles are common in this industry?
+    2. How do companies in this space differentiate their services?
+    3. What specializations or niches exist?
+    4. What would customers search for when looking for these services?
+    5. What terms do these businesses use to describe themselves?
 
-    For {industry}, provide real business categories, not generic terms.
+    CRITICAL: Avoid generic terms like "{industry.lower()} business", "{industry.lower()} company", "{industry.lower()} service"
 
-    Return this exact JSON format:
+    Instead, provide SPECIFIC business categories that real companies use:
+
+    Examples of specificity:
+    - Instead of "healthcare business" → "hospital", "dental clinic", "urgent care center"
+    - Instead of "real estate company" → "real estate brokerage", "property management company", "commercial real estate firm"
+    - Instead of "technology business" → "software development company", "IT consulting firm", "cybersecurity company"
+
+    Analyze {industry} in {region} and provide:
+
     {{
-        "core_terms": ["15+ specific business subtypes like 'digital lending platform', 'crypto exchange'"],
-        "technical_terms": ["10+ technology and specialized terms used in this industry"],
-        "role_titles": ["10+ job titles and decision maker roles"],
-        "business_types": ["company structures and business models"],
-        "related_industries": ["adjacent sectors and suppliers"],
+        "core_terms": [
+            "15-20 specific business types that actually exist in {industry}",
+            "use real business categories that appear in directories",
+            "terms that businesses use to describe themselves",
+            "specific service types within this industry"
+        ],
+        "technical_terms": [
+            "industry-specific technology terms",
+            "specialized equipment or software",
+            "regulatory compliance terms",
+            "certifications and standards",
+            "technical processes used in this industry"
+        ],
+        "role_titles": [
+            "C-level executives (CEO, CTO, CFO)",
+            "department heads and managers", 
+            "specialized professional roles",
+            "decision maker positions",
+            "industry-specific job titles"
+        ],
+        "business_types": [
+            "organizational structures (LLC, corporation, partnership)",
+            "business models (B2B, B2C, franchise)",
+            "company sizes (startup, SME, enterprise)",
+            "ownership types (private, public, family-owned)"
+        ],
+        "related_industries": [
+            "supplier industries",
+            "partner sectors",
+            "adjacent markets",
+            "supporting services",
+            "complementary businesses"
+        ],
         "regional_variations": {{}}
     }}
 
-    Focus on how real companies describe their services. Return ONLY the JSON, no other text."""
+    Focus on terms that real businesses use on their websites and in their marketing.
+    Return ONLY valid JSON with no additional text."""
 
         try:
             response = await asyncio.to_thread(
                 lambda: self.client.messages.create(
                     model=settings.CLAUDE_MODEL,
-                    max_tokens=1500,
+                    max_tokens=2000,
                     messages=[{"role": "user", "content": prompt}]
                 )
             )
 
             content = response.content[0].text.strip()
-            print(f"DEBUG - Claude response: {content}")  # Debug line
+            logger.info(f"Claude industry analysis response: {len(content)} characters")
 
-            analysis_data = json.loads(content)
+            # Clean JSON extraction
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+
+            # Find JSON object in response
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start != -1 and end != 0:
+                json_content = content[start:end]
+            else:
+                json_content = content
+
+            analysis_data = json.loads(json_content)
+
+            # Validate that we have specific terms, not generic ones
+            core_terms = analysis_data.get("core_terms", [])
+            filtered_terms = [
+                term for term in core_terms
+                if not any(generic in term.lower() for generic in [
+                    f"{industry.lower()} business",
+                    f"{industry.lower()} company",
+                    f"{industry.lower()} service",
+                    f"{industry.lower()} firm"
+                ])
+            ]
+
+            # If we filtered out too many generic terms, keep some but log warning
+            if len(filtered_terms) < 5:
+                logger.warning(f"Industry analysis for {industry} returned mostly generic terms")
+                analysis_data["core_terms"] = core_terms[:15]  # Keep original
+            else:
+                analysis_data["core_terms"] = filtered_terms[:15]  # Use filtered
+
             return IndustryAnalysis(**analysis_data)
 
         except json.JSONDecodeError as e:
-            print(f"DEBUG - JSON parsing failed: {e}")
-            print(f"DEBUG - Raw content: {content}")
-            return self._fallback_analysis(industry)
+            logger.error(f"JSON parsing failed for industry analysis: {e}")
+            logger.error(f"Raw Claude response: {content[:500]}...")
+            return self._fallback_industry_analysis(industry)
 
         except Exception as e:
-            print(f"DEBUG - Industry analysis failed: {e}")
-            return self._fallback_analysis(industry)
+            logger.error(f"Claude industry analysis failed: {e}")
+            return self._fallback_industry_analysis(industry)
 
-    def _fallback_analysis(self, industry: str) -> IndustryAnalysis:
-        """Reliable fallback that always returns a valid object"""
-        return IndustryAnalysis(
-            core_terms=[
-                f"{industry.lower()} business",
-                f"{industry.lower()} company",
-                f"{industry.lower()} service",
-                f"{industry.lower()} platform",
-                f"{industry.lower()} startup"
-            ],
-            technical_terms=[],
-            role_titles=["CEO", "founder", "manager", "director"],
-            business_types=["company", "startup", "firm"],
-            related_industries=[],
-            regional_variations={}
+    def _fallback_industry_analysis(self, industry: str) -> IndustryAnalysis:
+        """Fallback with some intelligence based on common industry patterns"""
+
+        # Basic industry-specific fallbacks
+        industry_fallbacks = {
+            "healthcare": ["hospital", "medical clinic", "dental practice", "urgent care center",
+                           "physical therapy clinic"],
+            "fintech": ["digital bank", "payment processor", "crypto exchange", "lending platform", "robo advisor"],
+            "real estate": ["real estate brokerage", "property management company", "commercial real estate firm",
+                            "residential real estate agency"],
+            "education": ["private school", "tutoring center", "online learning platform",
+                          "vocational training institute"],
+            "retail": ["clothing store", "electronics retailer", "grocery store", "specialty retail shop"],
+            "food": ["restaurant", "catering company", "food truck", "bakery", "cafe"],
+            "technology": ["software development company", "IT consulting firm", "cybersecurity company",
+                           "web design agency"]
+        }
+
+        # Get specific terms for the industry or use generic pattern
+        core_terms = industry_fallbacks.get(
+            industry.lower(),
+            [f"{industry} specialist", f"{industry} consultant", f"{industry} provider"]
         )
 
+        return IndustryAnalysis(
+            core_terms=core_terms + [f"{industry.lower()} company", f"{industry.lower()} business"],
+            technical_terms=["technology", "software", "digital platform", "automation"],
+            role_titles=["CEO", "founder", "president", "director", "manager", "owner"],
+            business_types=["company", "corporation", "LLC", "partnership", "startup"],
+            related_industries=["consulting", "technology", "marketing", "finance"],
+            regional_variations={}
+        )
     async def generate_email_optimized_queries(self, industry_data, geo_data, request):
-        prompt = f"""Generate {request.top_k} Google search queries that find business websites containing email addresses.
+        prompt = f"""You are a search optimization expert. Generate and rank the MOST EFFECTIVE search queries.
 
-        Business types: {industry_data.core_terms[:15]}
-        Locations: {[geo_data.primary_city] + geo_data.neighborhoods[:8]}
+        Available elements:
+        Business types: {industry_data.core_terms[:20]}
+        Locations: {[geo_data.primary_city] + geo_data.neighborhoods[:10] + geo_data.metro_areas[:5]}
+        Email providers: gmail.com, yahoo.com, outlook.com, hotmail.com, aol.com, live.com
+        TLD options: .com, .org, .net
 
-        Use this structure:
-        site:.com "business_type" "location" "@gmail.com"
-        site:.org "business_type" "location" "@yahoo.com"  
-        site:.net "business_type" "location" "@outlook.com"
+        Your task: Generate {request.top_k * 3} potential queries, then select the BEST {request.top_k} based on these criteria:
 
-        Requirements:
-        - Rotate between .com, .org, .net domains
-        - Use different business types from core terms
-        - Use different locations
-        - Vary email providers: @gmail.com, @yahoo.com, @outlook.com, @hotmail.com
-        - Each query must be unique
+        RANKING FACTORS:
+        1. Business term specificity (specific > generic)
+        2. Location coverage (major city + neighborhoods)
+        3. Email provider diversity
+        4. Query uniqueness (avoid similar patterns)
+        5. Search volume potential (popular terms > obscure terms)
 
-        Return the queries as a single concatenated string with no spaces between queries.
-        Format: query1query2query3...
+        PATTERNS TO USE:
+        - site:.com "business_type" "location" "@email_provider"
+        - site:.org "business_type" "location" "@email_provider"  
+        - "business_type" "major_city" "@email_provider"
+        - "business_type" "neighborhood" "@email_provider"
 
-        Generate exactly {request.top_k} queries."""
+        OPTIMIZATION STRATEGY:
+        - Prioritize specific business types that actually exist
+        - Balance major cities with neighborhoods for coverage
+        - Distribute email providers evenly
+        - Avoid redundant location-business combinations
+        - Select queries with highest discovery potential
+
+        Generate and internally rank queries, then return the TOP {request.top_k} most effective ones.
+
+        Return JSON array: ["top_ranked_query1", "top_ranked_query2", ...]"""
 
         try:
             response = await asyncio.to_thread(
