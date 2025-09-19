@@ -173,6 +173,9 @@ class ClaudeService:
             related_industries=["consulting", "technology", "marketing", "finance"],
             regional_variations={}
         )
+
+    # In your claude_service.py, find this method and replace the return statement:
+
     async def generate_email_optimized_queries(self, industry_data, geo_data, request):
         prompt = f"""You are a search optimization expert. Generate and rank the MOST EFFECTIVE search queries.
 
@@ -237,27 +240,40 @@ class ClaudeService:
 
             if isinstance(queries, list) and len(queries) > 0:
                 logger.info(f"Claude generated {len(queries)} queries successfully")
-                concatenated_queries = "".join(queries)
-                return concatenated_queries
+                # ✅ FIXED: Return the array directly, don't concatenate
+                return queries  # This was the issue!
             else:
                 raise ValueError("Invalid response format")
 
         except Exception as e:
             logger.error(f"Claude query generation failed: {e}, using fallback")
-            # Simple but diverse fallback using Claude's industry analysis
-            queries = []
-            email_providers = settings.EMAIL_PROVIDERS
-            terms = industry_data.core_terms[:15]
-            locations = [geo_data.primary_city] + geo_data.neighborhoods[:10]
+            # ✅ FIXED: Fallback should also return array
+            return self._generate_fallback_queries_array(industry_data, geo_data, request)
 
-            for i in range(request.top_k):
-                term = terms[i % len(terms)]
-                location = locations[i % len(locations)]
-                email = email_providers[i % len(email_providers)]
-                query = f'"{term}" "{location}" @{email}'
-                queries.append(query)
+    # ✅ NEW: Add this method to your ClaudeService class
+    def _generate_fallback_queries_array(self, industry_data, geo_data, request):
+        """Generate fallback queries as array (not concatenated string)"""
+        logger.info("Creating fallback queries as array")
 
-            return queries
+        queries = []
+        email_providers = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "aol.com", "live.com"]
+        tlds = [".com", ".org", ".net"]
+
+        # Use the core terms we know exist
+        terms = industry_data.core_terms[:15] if industry_data.core_terms else ["business", "company", "service"]
+        locations = [geo_data.primary_city] + geo_data.neighborhoods[:10]
+
+        for i in range(request.top_k):
+            term = terms[i % len(terms)]
+            location = locations[i % len(locations)]
+            email = email_providers[i % len(email_providers)]
+            tld = tlds[i % len(tlds)]
+
+            query = f'site:{tld} "{term}" "{location}" "@{email}"'
+            queries.append(query)
+
+        # ✅ Return array, not concatenated string
+        return queries
 
     def _generate_fallback_queries(self, industry_data, geo_data, request):
         """Generate fallback queries that always work"""
@@ -280,9 +296,8 @@ class ClaudeService:
             query = f'site:{tld} "{term}" "{location}" "@{email}"'
             queries.append(query)
 
-        # Return concatenated string directly
-        concatenated_queries = "".join(queries)
-        return concatenated_queries
+
+        return queries
 
 
     def _queries_too_similar(self, queries: list) -> bool:
