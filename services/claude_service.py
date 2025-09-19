@@ -1,5 +1,6 @@
 """
 Claude API service for intelligent query generation
+Industry-agnostic with robust error handling and dynamic fallbacks
 """
 import json
 import asyncio
@@ -19,75 +20,64 @@ class ClaudeService:
 
     async def analyze_industry(self, industry: str, region: str) -> IndustryAnalysis:
         """
-        Deep industry analysis that generates specific business types, not generic terms
+        Industry analysis with improved prompt engineering and robust error handling
         """
-        prompt = f"""You are a business intelligence expert analyzing the {industry} industry to identify REAL business types.
+        prompt = f"""Analyze the "{industry}" industry. You are an expert business analyst.
 
-    Your goal: Break down {industry} into specific business categories that actually exist and operate.
+TASK: Identify specific business types, roles, and terms in the {industry} industry.
 
-    Think like a business directory expert:
-    1. What specific types of businesses operate within {industry}?
-    2. How do companies in this space differentiate their services?
-    3. What specializations or niches exist?
-    4. What would customers search for when looking for these services?
-    5. What terms do these businesses use to describe themselves?
+RULES:
+1. Focus on REAL business types that actually exist
+2. Avoid generic terms like "{industry.lower()} business" or "{industry.lower()} company"  
+3. Think about what customers search for when looking for these services
+4. Consider different specializations within this industry
+5. Use terms that real businesses use on their websites and marketing
 
-    CRITICAL: Avoid generic terms like "{industry.lower()} business", "{industry.lower()} company", "{industry.lower()} service"
+EXAMPLES of specificity:
+- Instead of "healthcare business" → "hospital", "dental clinic", "urgent care center"
+- Instead of "real estate company" → "real estate brokerage", "property management company"
+- Instead of "technology business" → "software development company", "IT consulting firm"
 
-    Instead, provide SPECIFIC business categories that real companies use:
+OUTPUT FORMAT: Return valid JSON with exactly these fields:
 
-    Examples of specificity:
-    - Instead of "healthcare business" → "hospital", "dental clinic", "urgent care center"
-    - Instead of "real estate company" → "real estate brokerage", "property management company", "commercial real estate firm"
-    - Instead of "technology business" → "software development company", "IT consulting firm", "cybersecurity company"
+{{
+    "core_terms": [
+        "List 10-15 specific business types that actually exist in {industry}",
+        "Use terms that real businesses use to describe themselves",
+        "Focus on searchable, specific business categories"
+    ],
+    "technical_terms": [
+        "Industry-specific technology, equipment, software",
+        "Certification names, standards, regulatory terms",
+        "Technical processes and methodologies"
+    ],
+    "role_titles": [
+        "CEO", "President", "Director", "Manager",
+        "Industry-specific job titles and decision-maker positions"
+    ],
+    "business_types": [
+        "LLC", "Corporation", "Partnership", "Franchise",
+        "Organizational structures and business models"
+    ],
+    "related_industries": [
+        "Industries that work with {industry}",
+        "Supplier industries and adjacent markets",
+        "Supporting services and complementary businesses"
+    ],
+    "regional_variations": {{}}
+}}
 
-    Analyze {industry} in {region} and provide:
+Industry to analyze: {industry}
+Region: {region}
 
-    {{
-        "core_terms": [
-            "15-20 specific business types that actually exist in {industry}",
-            "use real business categories that appear in directories",
-            "terms that businesses use to describe themselves",
-            "specific service types within this industry"
-        ],
-        "technical_terms": [
-            "industry-specific technology terms",
-            "specialized equipment or software",
-            "regulatory compliance terms",
-            "certifications and standards",
-            "technical processes used in this industry"
-        ],
-        "role_titles": [
-            "C-level executives (CEO, CTO, CFO)",
-            "department heads and managers", 
-            "specialized professional roles",
-            "decision maker positions",
-            "industry-specific job titles"
-        ],
-        "business_types": [
-            "organizational structures (LLC, corporation, partnership)",
-            "business models (B2B, B2C, franchise)",
-            "company sizes (startup, SME, enterprise)",
-            "ownership types (private, public, family-owned)"
-        ],
-        "related_industries": [
-            "supplier industries",
-            "partner sectors",
-            "adjacent markets",
-            "supporting services",
-            "complementary businesses"
-        ],
-        "regional_variations": {{}}
-    }}
-
-    Focus on terms that real businesses use on their websites and in their marketing.
-    Return ONLY valid JSON with no additional text."""
+Return only the JSON object. No explanations, markdown, or additional text."""
 
         try:
             response = await asyncio.to_thread(
                 lambda: self.client.messages.create(
                     model=settings.CLAUDE_MODEL,
-                    max_tokens=2000,
+                    max_tokens=1500,  # Reduced for more concise output
+                    temperature=0.3,   # Lower temperature for consistency
                     messages=[{"role": "user", "content": prompt}]
                 )
             )
@@ -95,26 +85,76 @@ class ClaudeService:
             content = response.content[0].text.strip()
             logger.info(f"Claude industry analysis response: {len(content)} characters")
 
-            # Clean JSON extraction
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
+            # Extract and validate JSON
+            json_content = self._extract_json_safely(content)
+            logger.debug(f"Extracted JSON preview: {json_content[:200]}...")
 
-            # Find JSON object in response
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start != -1 and end != 0:
-                json_content = content[start:end]
-            else:
-                json_content = content
+            try:
+                analysis_data = json.loads(json_content)
+                logger.info(f"Successfully parsed JSON with keys: {list(analysis_data.keys())}")
 
-            analysis_data = json.loads(json_content)
+                # Validate and clean the data structure
+                validated_data = self._validate_analysis_structure(analysis_data, industry)
 
-            # Validate that we have specific terms, not generic ones
-            core_terms = analysis_data.get("core_terms", [])
+                return IndustryAnalysis(**validated_data)
+
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode failed for '{industry}': {e}")
+                logger.error(f"Problematic JSON content: {json_content[:300]}...")
+                return self._create_intelligent_fallback(industry, region)
+
+        except Exception as e:
+            logger.error(f"Claude industry analysis failed for '{industry}': {str(e)}")
+            return self._create_intelligent_fallback(industry, region)
+
+    def _extract_json_safely(self, content: str) -> str:
+        """Extract JSON from Claude response safely"""
+        # Remove markdown code blocks
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        # Find JSON object boundaries
+        start = content.find("{")
+        end = content.rfind("}") + 1
+
+        if start != -1 and end != 0:
+            return content[start:end]
+        else:
+            # If no clear JSON boundaries, try the whole content
+            return content
+
+    def _validate_analysis_structure(self, data: dict, industry: str) -> dict:
+        """Ensure the data matches our expected structure"""
+
+        # Required fields with defaults
+        validated = {
+            "core_terms": [],
+            "technical_terms": [],
+            "role_titles": [],
+            "business_types": [],
+            "related_industries": [],
+            "regional_variations": {}
+        }
+
+        # Copy valid data, ensuring correct types
+        for field in validated.keys():
+            if field in data:
+                if field == "regional_variations":
+                    validated[field] = data[field] if isinstance(data[field], dict) else {}
+                else:
+                    if isinstance(data[field], list):
+                        validated[field] = data[field]
+                    elif isinstance(data[field], str):
+                        validated[field] = [data[field]]  # Convert single string to list
+                    else:
+                        logger.warning(f"Field {field} has unexpected type: {type(data[field])}")
+
+        # Filter out generic terms from core_terms
+        if validated["core_terms"]:
             filtered_terms = [
-                term for term in core_terms
+                term for term in validated["core_terms"]
                 if not any(generic in term.lower() for generic in [
                     f"{industry.lower()} business",
                     f"{industry.lower()} company",
@@ -123,134 +163,203 @@ class ClaudeService:
                 ])
             ]
 
-            # If we filtered out too many generic terms, keep some but log warning
-            if len(filtered_terms) < 5:
-                logger.warning(f"Industry analysis for {industry} returned mostly generic terms")
-                analysis_data["core_terms"] = core_terms[:15]  # Keep original
+            # Use filtered terms if we have enough, otherwise keep original
+            if len(filtered_terms) >= 5:
+                validated["core_terms"] = filtered_terms[:15]
             else:
-                analysis_data["core_terms"] = filtered_terms[:15]  # Use filtered
+                logger.warning(f"Industry analysis for {industry} returned mostly generic terms")
+                validated["core_terms"] = validated["core_terms"][:15]
 
-            return IndustryAnalysis(**analysis_data)
+        # Ensure minimum viable data
+        if not validated["core_terms"]:
+            validated["core_terms"] = [f"{industry} provider", f"{industry} service", f"{industry} specialist"]
 
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parsing failed for industry analysis: {e}")
-            logger.error(f"Raw Claude response: {content[:500]}...")
-            return self._fallback_industry_analysis(industry)
+        if not validated["role_titles"]:
+            validated["role_titles"] = ["CEO", "President", "Director", "Manager", "Owner"]
 
-        except Exception as e:
-            logger.error(f"Claude industry analysis failed: {e}")
-            return self._fallback_industry_analysis(industry)
+        return validated
 
-    def _fallback_industry_analysis(self, industry: str) -> IndustryAnalysis:
-        """Fallback with some intelligence based on common industry patterns"""
+    def _create_intelligent_fallback(self, industry: str, region: str) -> IndustryAnalysis:
+        """Create a truly dynamic fallback using word analysis - NO HARDCODING"""
+        logger.info(f"Creating intelligent fallback for industry: {industry}")
 
-        # Basic industry-specific fallbacks
-        industry_fallbacks = {
-            "healthcare": ["hospital", "medical clinic", "dental practice", "urgent care center",
-                           "physical therapy clinic"],
-            "fintech": ["digital bank", "payment processor", "crypto exchange", "lending platform", "robo advisor"],
-            "real estate": ["real estate brokerage", "property management company", "commercial real estate firm",
-                            "residential real estate agency"],
-            "education": ["private school", "tutoring center", "online learning platform",
-                          "vocational training institute"],
-            "retail": ["clothing store", "electronics retailer", "grocery store", "specialty retail shop"],
-            "food": ["restaurant", "catering company", "food truck", "bakery", "cafe"],
-            "technology": ["software development company", "IT consulting firm", "cybersecurity company",
-                           "web design agency"]
-        }
+        # Extract meaningful words from the industry term
+        stop_words = {'the', 'and', 'or', 'of', 'in', 'for', 'to', 'a', 'an', 'with', 'by'}
+        industry_words = [word for word in industry.lower().split()
+                         if word not in stop_words and len(word) > 2]
 
-        # Get specific terms for the industry or use generic pattern
-        core_terms = industry_fallbacks.get(
+        # Generate core terms dynamically
+        core_terms = []
+
+        # Base patterns that work for any industry
+        base_patterns = [
+            "{} company",
+            "{} firm",
+            "{} service",
+            "{} provider",
+            "{} specialist",
+            "{} consultant",
+            "{} agency",
+            "{} business",
+            "{} organization"
+        ]
+
+        # Use the original industry phrase and individual words
+        for pattern in base_patterns[:6]:  # Limit patterns to avoid too many terms
+            # Use full industry term
+            core_terms.append(pattern.format(industry.lower()))
+
+            # Use key words from industry (take first 2 meaningful words)
+            for word in industry_words[:2]:
+                if len(word) > 3:  # Skip very short words
+                    core_terms.append(pattern.format(word))
+
+        # Add some variations without patterns
+        core_terms.extend([
             industry.lower(),
-            [f"{industry} specialist", f"{industry} consultant", f"{industry} provider"]
-        )
+            f"{industry.lower()} solutions",
+            f"professional {industry.lower()}",
+        ])
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_core_terms = []
+        for term in core_terms:
+            if term not in seen:
+                seen.add(term)
+                unique_core_terms.append(term)
 
         return IndustryAnalysis(
-            core_terms=core_terms + [f"{industry.lower()} company", f"{industry.lower()} business"],
-            technical_terms=["technology", "software", "digital platform", "automation"],
-            role_titles=["CEO", "founder", "president", "director", "manager", "owner"],
-            business_types=["company", "corporation", "LLC", "partnership", "startup"],
-            related_industries=["consulting", "technology", "marketing", "finance"],
+            core_terms=unique_core_terms[:15],
+            technical_terms=self._generate_universal_tech_terms(),
+            role_titles=self._generate_universal_roles(),
+            business_types=self._generate_universal_business_types(),
+            related_industries=self._generate_related_from_words(industry_words),
             regional_variations={}
         )
 
-    # In your claude_service.py, find this method and replace the return statement:
+    def _generate_universal_tech_terms(self):
+        """Universal technical terms that apply to most industries"""
+        return [
+            "software", "platform", "technology", "system", "solution",
+            "automation", "digital", "online", "cloud", "data",
+            "analytics", "tools", "equipment"
+        ]
+
+    def _generate_universal_roles(self):
+        """Universal executive roles that exist in most industries"""
+        return [
+            "CEO", "President", "Director", "Manager", "Owner", "Founder",
+            "Vice President", "Head", "Lead", "Principal", "Partner",
+            "Executive", "Administrator", "Supervisor"
+        ]
+
+    def _generate_universal_business_types(self):
+        """Universal business structures"""
+        return [
+            "company", "corporation", "LLC", "partnership", "firm",
+            "enterprise", "organization", "business", "agency",
+            "startup", "SME", "franchise"
+        ]
+
+    def _generate_related_from_words(self, industry_words):
+        """Generate related industries based on the words in the original industry"""
+        related = ["consulting", "technology", "finance", "marketing", "legal services"]
+
+        # Add the industry words themselves as related areas
+        for word in industry_words:
+            if len(word) > 3:
+                related.append(f"{word} services")
+                related.append(f"{word} consulting")
+
+        return list(set(related))[:8]  # Remove duplicates and limit
 
     async def generate_email_optimized_queries(self, industry_data, geo_data, request):
+        """Generate optimized queries with robust error handling"""
         prompt = f"""You are a search optimization expert. Generate and rank the MOST EFFECTIVE search queries.
 
-        Available elements:
-        Business types: {industry_data.core_terms[:20]}
-        Locations: {[geo_data.primary_city] + geo_data.neighborhoods[:10] + geo_data.metro_areas[:5]}
-        Email providers: gmail.com, yahoo.com, outlook.com, hotmail.com, aol.com, live.com
-        TLD options: .com, .org, .net
+Available elements:
+Business types: {industry_data.core_terms[:20]}
+Locations: {[geo_data.primary_city] + geo_data.neighborhoods[:10] + geo_data.metro_areas[:5]}
+Email providers: gmail.com, yahoo.com, outlook.com, hotmail.com, aol.com, live.com
+TLD options: .com, .org, .net
 
-        Your task: Generate {request.top_k * 3} potential queries, then select the BEST {request.top_k} based on these criteria:
+Your task: Generate {request.top_k * 2} potential queries, then select the BEST {request.top_k} based on these criteria:
 
-        RANKING FACTORS:
-        1. Business term specificity (specific > generic)
-        2. Location coverage (major city + neighborhoods)
-        3. Email provider diversity
-        4. Query uniqueness (avoid similar patterns)
-        5. Search volume potential (popular terms > obscure terms)
+RANKING FACTORS:
+1. Business term specificity (specific > generic)
+2. Location coverage (major city + neighborhoods)
+3. Email provider diversity
+4. Query uniqueness (avoid similar patterns)
+5. Search volume potential (popular terms > obscure terms)
 
-        PATTERNS TO USE:
-        - site:.com "business_type" "location" "@email_provider"
-        - site:.org "business_type" "location" "@email_provider"  
-        - "business_type" "major_city" "@email_provider"
-        - "business_type" "neighborhood" "@email_provider"
+PATTERNS TO USE:
+- site:.com "business_type" "location" "@email_provider"
+- site:.org "business_type" "location" "@email_provider"  
+- "business_type" "major_city" "@email_provider"
+- "business_type" "neighborhood" "@email_provider"
 
-        OPTIMIZATION STRATEGY:
-        - Prioritize specific business types that actually exist
-        - Balance major cities with neighborhoods for coverage
-        - Distribute email providers evenly
-        - Avoid redundant location-business combinations
-        - Select queries with highest discovery potential
+OPTIMIZATION STRATEGY:
+- Prioritize specific business types that actually exist
+- Balance major cities with neighborhoods for coverage
+- Distribute email providers evenly
+- Avoid redundant location-business combinations
+- Select queries with highest discovery potential
 
-        Generate and internally rank queries, then return the TOP {request.top_k} most effective ones.
+Generate and internally rank queries, then return the TOP {request.top_k} most effective ones.
 
-        Return JSON array: ["top_ranked_query1", "top_ranked_query2", ...]"""
+Return ONLY a JSON array: ["query1", "query2", "query3", ...]"""
 
         try:
             response = await asyncio.to_thread(
                 lambda: self.client.messages.create(
                     model=settings.CLAUDE_MODEL,
                     max_tokens=2000,
+                    temperature=0.4,
                     messages=[{"role": "user", "content": prompt}]
                 )
             )
 
             content = response.content[0].text.strip()
+            logger.info(f"Claude query generation response: {len(content)} characters")
 
-            # Clean up Claude's response - remove any markdown or extra text
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
+            # Extract JSON array
+            json_content = self._extract_json_array_safely(content)
 
-            # Find JSON array in the response
-            start = content.find("[")
-            end = content.rfind("]") + 1
-            if start != -1 and end != 0:
-                json_content = content[start:end]
-            else:
-                json_content = content
+            try:
+                queries = json.loads(json_content)
 
-            queries = json.loads(json_content)
+                if isinstance(queries, list) and len(queries) > 0:
+                    logger.info(f"Claude generated {len(queries)} queries successfully")
+                    return queries
+                else:
+                    raise ValueError("Invalid response format - not a list or empty")
 
-            if isinstance(queries, list) and len(queries) > 0:
-                logger.info(f"Claude generated {len(queries)} queries successfully")
-                # ✅ FIXED: Return the array directly, don't concatenate
-                return queries  # This was the issue!
-            else:
-                raise ValueError("Invalid response format")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing failed for query generation: {e}")
+                logger.error(f"Problematic content: {json_content[:200]}...")
+                return self._generate_fallback_queries_array(industry_data, geo_data, request)
 
         except Exception as e:
             logger.error(f"Claude query generation failed: {e}, using fallback")
-            # ✅ FIXED: Fallback should also return array
             return self._generate_fallback_queries_array(industry_data, geo_data, request)
 
-    # ✅ NEW: Add this method to your ClaudeService class
+    def _extract_json_array_safely(self, content: str) -> str:
+        """Extract JSON array from Claude response safely"""
+        # Remove markdown code blocks
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        # Find JSON array boundaries
+        start = content.find("[")
+        end = content.rfind("]") + 1
+        if start != -1 and end != 0:
+            return content[start:end]
+        else:
+            return content
+
     def _generate_fallback_queries_array(self, industry_data, geo_data, request):
         """Generate fallback queries as array (not concatenated string)"""
         logger.info("Creating fallback queries as array")
@@ -263,84 +372,19 @@ class ClaudeService:
         terms = industry_data.core_terms[:15] if industry_data.core_terms else ["business", "company", "service"]
         locations = [geo_data.primary_city] + geo_data.neighborhoods[:10]
 
-        for i in range(request.top_k):
-            term = terms[i % len(terms)]
-            location = locations[i % len(locations)]
-            email = email_providers[i % len(email_providers)]
-            tld = tlds[i % len(tlds)]
-
-            query = f'site:{tld} "{term}" "{location}" "@{email}"'
-            queries.append(query)
-
-        # ✅ Return array, not concatenated string
-        return queries
-
-    def _generate_fallback_queries(self, industry_data, geo_data, request):
-        """Generate fallback queries that always work"""
-        logger.info("Creating fallback queries")
-
-        queries = []
-        email_providers = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "aol.com", "live.com"]
-        tlds = [".com", ".org", ".net"]
-
-        # Use the core terms we know exist
-        terms = industry_data.core_terms[:15] if industry_data.core_terms else ["business", "company", "service"]
-        locations = [geo_data.primary_city] + geo_data.neighborhoods[:10]
-
-        for i in range(request.top_k):
-            term = terms[i % len(terms)]
-            location = locations[i % len(locations)]
-            email = email_providers[i % len(email_providers)]
-            tld = tlds[i % len(tlds)]
-
-            query = f'site:{tld} "{term}" "{location}" "@{email}"'
-            queries.append(query)
-
-
-        return queries
-
-
-    def _queries_too_similar(self, queries: list) -> bool:
-        """Check if queries are too repetitive"""
-        if len(queries) < 3:
-            return False
-
-        # Count how many queries use the same base pattern
-        base_patterns = []
-        for query in queries[:5]:  # Check first 5
-            # Extract pattern (remove quotes and specific terms)
-            pattern = query.lower().replace('"', '')
-            for provider in settings.EMAIL_PROVIDERS:
-                pattern = pattern.replace(provider, 'EMAIL')
-            base_patterns.append(pattern)
-
-        # If more than 60% are the same pattern, it's too repetitive
-        most_common = max(set(base_patterns), key=base_patterns.count)
-        repetition_rate = base_patterns.count(most_common) / len(base_patterns)
-
-        return repetition_rate > 0.6
-
-    def _generate_diverse_fallback(self, industry_data, geo_data, request):
-        """Generate diverse queries algorithmically"""
-        queries = []
+        # Generate diverse query patterns
         patterns = [
-            '"{term}" "{location}" @{email}',
-            'site:{tld} "{term}" "{location}" @{email}',
-            'filetype:pdf "{term}" "{location}" @{email}',
-            '"{term}" "{location}" contact @{email}',
-            '"{term} company" "{location}" @{email}'
+            'site:{tld} "{term}" "{location}" "@{email}"',
+            '"{term}" "{location}" "@{email}"',
+            'site:{tld} "{term}" "{location}" contact @{email}',
+            '"{term} company" "{location}" "@{email}"'
         ]
-
-        terms = industry_data.core_terms[:20] if industry_data.core_terms else ["business"]
-        locations = ([geo_data.primary_city] + geo_data.neighborhoods + geo_data.metro_areas)[:15]
-        emails = settings.EMAIL_PROVIDERS
-        tlds = geo_data.business_tlds
 
         for i in range(request.top_k):
             pattern = patterns[i % len(patterns)]
             term = terms[i % len(terms)]
             location = locations[i % len(locations)]
-            email = emails[i % len(emails)]
+            email = email_providers[i % len(email_providers)]
             tld = tlds[i % len(tlds)]
 
             query = pattern.format(term=term, location=location, email=email, tld=tld)
