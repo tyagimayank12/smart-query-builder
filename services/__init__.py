@@ -1,6 +1,9 @@
+# services/__init__.py
 """
 Services package for Smart Query Builder
 """
 
-# Simple init file - no imports for now
-__version__ = "1.0.0"
+from .Serp_service import  SerpService
+from .claude_service import ClaudeService
+
+__all__ = ['Serp_service', 'ClaudeService']
