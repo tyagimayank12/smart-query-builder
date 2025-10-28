@@ -6,8 +6,8 @@ import logging
 from typing import List, Dict, Optional
 from anthropic import Anthropic
 from models import IndustryAnalysis, GeographicData, QueryRequest
-from services.serp_service import SerpService
-from services.claude_service import ClaudeService
+from services.Serp_service import SerpService
+
 
 logger = logging.getLogger(__name__)
 
