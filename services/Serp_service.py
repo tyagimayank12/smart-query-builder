@@ -2,6 +2,8 @@
 SERP Service for intelligent keyword and location understanding
 """
 import os
+import re
+
 import httpx
 import logging
 import json
@@ -215,6 +217,31 @@ class SerpService:
             return ['@gmail.com', '@outlook.com', '@company.com', '@yahoo.com']
         else:
             return ['@gmail.com', '@yahoo.com', '@outlook.com', '@hotmail.com', '@aol.com']
+
+    def _clean_serp_context(self, raw_context: dict) -> dict:
+        """Filter out garbage from SERP results"""
+
+        business_types = raw_context.get('primary_business_types', [])
+
+        # Filter out garbage
+        garbage_patterns = [
+            r'^\d+$',  # Just numbers like "4"
+            r'^company_page$',  # Metadata
+            r'^@\w+\.com$',  # Email domains
+            r'^[A-Z]{2,}$',  # Acronyms without context
+        ]
+
+        cleaned_types = []
+        for btype in business_types:
+            is_garbage = any(re.match(pattern, btype) for pattern in garbage_patterns)
+            if not is_garbage and len(btype) > 3:  # Minimum length
+                cleaned_types.append(btype)
+
+        return {
+            'business_types': cleaned_types[:5],  # Top 5 only
+            'is_b2b': raw_context.get('is_b2b', True),
+            'suggested_domains': ['@gmail.com', '@yahoo.com', '@outlook.com']
+        }
 
     def _get_fallback_context(self, keyword: str, location: str) -> Dict:
         """

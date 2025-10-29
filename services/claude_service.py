@@ -1,255 +1,404 @@
 """
-Claude Service - AI-powered query generation with SERP intelligence
+Claude Service - Intelligent Query Generation
+Completely rewritten to handle any industry input with semantic understanding
 """
-import os
+
+import anthropic
+import json
 import logging
-from typing import List, Dict, Optional
-from anthropic import Anthropic
-from models import IndustryAnalysis, GeographicData, QueryRequest
-from services.Serp_service import SerpService
-
-
-logger = logging.getLogger(__name__)
+import re
+from typing import List, Dict, Any, Optional
+import os
 
 
 class ClaudeService:
-    """
-    Claude service that uses SERP intelligence for smart query generation
-    """
+    """Service for generating intelligent search queries using Claude AI"""
 
     def __init__(self):
-        api_key = os.getenv('ANTHROPIC_API_KEY')
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY not found in environment variables")
+        self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        self.model = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+        self.logger = logging.getLogger(__name__)
 
-        self.client = Anthropic(api_key=api_key)
-        self.model = os.getenv('CLAUDE_MODEL', 'claude-3-haiku-20240307')
-        self.serp_service = SerpService()
-
-        logger.info(f"Claude service initialized with model: {self.model}")
-
-    async def generate_intelligent_queries(self, request: QueryRequest) -> List[str]:
+    async def generate_queries(
+        self,
+        industry: str,
+        region: str,
+        top_k: int = 10,
+        serp_context: Optional[Dict[str, Any]] = None
+    ) -> List[str]:
         """
-        Generate queries using SERP intelligence - no hardcoding, pure intelligence
+        Generate intelligent search queries with full semantic understanding.
+
+        Args:
+            industry: Any business type/industry (can be short or long phrase)
+            region: Geographic location
+            top_k: Number of queries to generate
+            serp_context: Optional context from SERP (used as hints, not rules)
+
+        Returns:
+            List of diverse, intelligent search queries
         """
-
-        # Get intelligent context from SERP (1 API call)
-        logger.info(f"Fetching intelligent context for {request.industry} in {request.region}")
-        context = await self.serp_service.get_intelligent_context(
-            request.industry,
-            request.region
-        )
-
-        # Build the intelligent prompt with SERP insights
-        prompt = f"""
-        Generate EXACTLY {request.top_k} Google search queries to find email contacts.
-        
-        Target: {request.industry} businesses in {request.region}
-        
-        INTELLIGENT CONTEXT FROM MARKET DATA:
-        - Business types that ARE this industry: {context['primary_business_types']}
-        - Related terms used in market: {context['keyword_variations']}
-        - Geographic areas to target: {context['location_areas']}
-        - Successful patterns: {context['search_patterns']}
-        - Business type: {'B2B' if context['is_b2b'] else 'B2C/Mixed'}
-        
-        GENERATION RULES:
-        1. Focus on businesses that ARE "{request.industry}" not those that serve it
-        2. Use the discovered business types and variations from market data
-        3. Include location variants: {request.region} and discovered areas
-        4. Email providers MUST be in quotes: "@gmail.com", "@yahoo.com", "@outlook.com"
-        5. Mix search operators: site:, intitle:, inurl:, "exact phrases"
-        
-        CRITICAL FORMAT: All parameters must be within quotes:
-        - Business type: "Real Estate Agency"
-        - Location: "Manhattan"
-        - Email: "@gmail.com"
-        Example: site:.com "Real Estate Agency" "Manhattan" "@gmail.com"
-        
-        {"MUST INCLUDE: " + str(request.includes) if request.includes else ""}
-        {"MUST EXCLUDE: " + str(request.excludes) if request.excludes else ""}
-        
-        Create diverse, non-repetitive queries that would actually find {request.industry} email contacts.
-        
-        OUTPUT: Return EXACTLY {request.top_k} queries, one per line, no numbering, no explanations.
-        """
-
         try:
-            # Call Claude API
-            response = self.client.messages.create(
+            self.logger.info(f"Generating {top_k} queries for '{industry}' in '{region}'")
+
+            # Build the intelligent prompt
+            prompt = self._build_intelligent_prompt(industry, region, top_k, serp_context)
+
+            # Call Claude
+            message = self.client.messages.create(
                 model=self.model,
-                max_tokens=1000,
-                temperature=0.7,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
+                max_tokens=4096,
+                temperature=0.7,  # Higher temperature for more creative variations
+                messages=[{
+                    "role": "user",
+                    "content": prompt
+                }]
             )
 
-            # Parse response
-            content = response.content[0].text if response.content else ""
-            queries = [q.strip() for q in content.strip().split('\n') if q.strip()]
+            # Extract and parse response
+            response_text = message.content[0].text.strip()
+            queries = self._parse_claude_response(response_text, top_k)
 
-            # Remove any numbering if present
-            cleaned_queries = []
-            for query in queries:
-                # Remove leading numbers like "1. " or "1) "
-                import re
-                cleaned = re.sub(r'^\d+[\.\)]\s*', '', query)
-                if cleaned and not cleaned.startswith('#'):  # Skip comments
-                    cleaned_queries.append(cleaned)
+            # Validate queries
+            validated_queries = self._validate_queries(queries, top_k)
 
-            # Apply includes/excludes if specified
-            final_queries = self._apply_filters(cleaned_queries, request)
-
-            # Ensure exactly top_k queries
-            if len(final_queries) < request.top_k:
-                logger.warning(f"Generated only {len(final_queries)} queries, requested {request.top_k}")
-                # Generate a few more if needed
-                final_queries = self._generate_fallback_queries(
-                    final_queries,
-                    request,
-                    context
-                )
-
-            return final_queries[:request.top_k]
+            self.logger.info(f"Successfully generated {len(validated_queries)} queries")
+            return validated_queries
 
         except Exception as e:
-            logger.error(f"Claude API error: {e}")
-            # Fallback to basic queries using context
-            return self._create_fallback_queries(request, context)
+            self.logger.error(f"Error generating queries: {str(e)}")
+            # Fallback to basic queries if Claude fails
+            return self._generate_fallback_queries(industry, region, top_k)
 
-    async def analyze_industry(self, industry: str, region: str) -> IndustryAnalysis:
-        """
-        Analyze industry using SERP context
-        """
-        # Get context from SERP
-        context = await self.serp_service.get_intelligent_context(industry, region)
+    def _build_intelligent_prompt(
+        self,
+        industry: str,
+        region: str,
+        top_k: int,
+        serp_context: Optional[Dict[str, Any]]
+    ) -> str:
+        """Build an intelligent prompt that handles any input type"""
 
-        # Build analysis from SERP data
-        return IndustryAnalysis(
-            core_terms=context.get('keyword_variations', [industry]),
-            technical_terms=[],  # Could enhance with another API call if needed
-            role_titles=self._generate_role_titles(industry, context),
-            business_types=context.get('primary_business_types', []),
-            is_b2b=context.get('is_b2b', False)
-        )
+        # Clean SERP context if provided
+        context_hint = ""
+        if serp_context:
+            cleaned_context = self._clean_serp_context(serp_context)
+            if cleaned_context.get('business_types'):
+                context_hint = f"\n\nHINT from market research (use intelligently, ignore if irrelevant):\n- Related business types found: {', '.join(cleaned_context['business_types'][:5])}"
 
-    def _generate_role_titles(self, industry: str, context: Dict) -> List[str]:
-        """
-        Generate role titles based on industry and context
-        """
-        base_titles = ['owner', 'manager', 'director', 'CEO', 'founder']
+        prompt = f"""You are an expert at generating Google X-ray search queries for lead generation. Your goal is to find business contacts across various platforms.
 
-        # Add industry-specific titles
-        if context.get('is_b2b'):
-            base_titles.extend(['sales director', 'business development', 'account manager'])
+INPUT:
+- Industry/Business Type: "{industry}"
+- Geographic Region: "{region}"
+- Number of queries needed: {top_k}
 
-        # Combine with industry
-        role_titles = []
-        for title in base_titles[:5]:
-            role_titles.append(f"{industry} {title}")
+YOUR TASK:
+Generate {top_k} highly diverse and intelligent Google search queries to find contacts in this industry.
 
-        return role_titles
+CRITICAL RULES FOR UNDERSTANDING THE INDUSTRY:
 
-    def _apply_filters(self, queries: List[str], request: QueryRequest) -> List[str]:
-        """
-        Apply include/exclude filters to queries
-        """
-        filtered = []
+1. **Semantic Intelligence** (MOST IMPORTANT):
+   - Understand what "{industry}" actually means
+   - If it's a long phrase like "real estate brokerage firms", understand the core business (real estate companies)
+   - If it's "Insurance broker agents and agencies", understand it means BOTH professionals AND companies
+   - If it's generic like "Insurance", expand to specific types (health insurance, auto insurance, life insurance)
+   - DO NOT just append words like "specialist", "consultant", "provider" to the input
+   - CREATE variations based on understanding, not templates
+
+2. **Generate Semantic Variations**:
+   - Synonyms: Different ways to describe the same business
+   - Related roles: Job titles in this industry  
+   - Company types: Different business structures in this industry
+   - Specializations: Specific niches within the industry
+   - Service variations: Different services offered
+
+3. **Query Patterns - B2C Business Website Searches ONLY**:
+   
+   You are searching for ACTUAL BUSINESS WEBSITES (B2C), NOT individual professionals or LinkedIn profiles.
+   
+   Pattern A - .com Domain Search with Email (50% of queries):
+   site:.com "Business Type" "Location" "@email.com"
+   Examples:
+   - site:.com "Insurance Agency" "Manhattan" "@gmail.com"
+   - site:.com "Real Estate Brokerage" "Brooklyn" "@yahoo.com"
+   - site:.com "Coffee Shop" "Portland" "@outlook.com"
+   
+   Pattern B - Multiple TLD Search with Contact (30% of queries):
+   site:.org OR site:.net "Business Type" "Location" contact OR email
+   Examples:
+   - site:.org "Insurance Broker" "New York" contact
+   - site:.net "Real Estate Agency" "Queens" email
+   - site:.com "Property Management" "Manhattan" contact
+   
+   Pattern C - Open Web Business Search (20% of queries):
+   "Business Type" "Location" "@email.com" -linkedin -indeed -jobs -careers
+   Examples:
+   - "Insurance Agency" "New York" "@gmail.com" -linkedin -jobs
+   - "Real Estate Brokerage" "Chicago" "@yahoo.com" -indeed -careers
+   - "Coffee Roastery" "Portland" "@outlook.com" -linkedin
+
+4. **Geographic Intelligence**:
+   - If "{region}" is a CITY (like "New York", "Chicago", "Los Angeles"):
+     * Include main city name
+     * Include major neighborhoods/boroughs
+     * Include metro area variations
+   - If "{region}" is a STATE (like "California", "Texas"):
+     * Include major cities in that state
+     * Include state name and abbreviation
+   - If "{region}" is SMALL/UNKNOWN:
+     * Use the exact region name provided
+     * Don't make up locations
+
+5. **Email Domain Rotation** (for queries that need email):
+   - Rotate through: @gmail.com, @yahoo.com, @outlook.com, @hotmail.com
+   - Occasionally use: @aol.com, @live.com, @icloud.com, @protonmail.com
+   - Don't repeat same email domain consecutively
+
+6. **Business Types to Focus On** (B2C ONLY):
+   - Local businesses: Coffee shops, restaurants, retail stores
+   - Service companies: Insurance agencies, real estate brokerages, law firms
+   - Professional firms: Accounting firms, consulting companies, marketing agencies
+   - Healthcare providers: Medical clinics, dental offices, urgent care centers
+   - Home services: Plumbing companies, HVAC contractors, cleaning services
+   
+   Focus on finding their WEBSITES (.com, .org, .net domains), NOT their LinkedIn profiles or employees.
+
+7. **CRITICAL - B2C ONLY (Avoid B2B Platforms)**:
+   ❌ NEVER use: site:linkedin.com
+   ❌ NEVER use: site:zoominfo.com
+   ❌ NEVER use: site:apollo.io
+   ❌ NEVER use: site:rocketreach.com
+   ❌ NEVER use: site:crunchbase.com
+   
+   ✅ ONLY use: site:.com, site:.org, site:.net, OR open web searches
+   ✅ ALWAYS exclude: -linkedin -indeed -jobs -careers -hiring
+   
+   We're finding BUSINESS WEBSITES, not individual people or business directories.
+
+8. **Other Mistakes to AVOID**:
+   ❌ Don't append generic words: "Insurance Brokers specialist" 
+   ❌ Don't use unsupported operators: intitle:, inurl:, -site:
+   ❌ Don't repeat similar queries (change location AND title AND email)
+   ❌ Don't search for just email domains without context
+   ❌ Don't use broken syntax like site:.com without meaningful terms
+
+9. **Proper Query Syntax**:
+   ✅ All phrases must be in quotes: "Insurance Broker" not Insurance Broker
+   ✅ Email patterns in quotes: "@gmail.com" not @gmail.com
+   ✅ Site operator format: site:linkedin.com OR site:.com
+   ✅ Exclusions: -jobs -careers -hiring (when needed)
+   ✅ Multiple terms: Use OR for alternatives: contact OR email
+
+EXAMPLES TO LEARN FROM:
+
+Example 1 - Input: "Insurance Brokers", Region: "New York"
+B2C Focus: Find insurance agency/brokerage WEBSITES, not individual professionals
+Good queries:
+✅ site:.com "Insurance Agency" "Manhattan" "@gmail.com"
+✅ site:.com "Insurance Brokerage" "Brooklyn" "@yahoo.com"
+✅ site:.org "Independent Insurance Agent" "Queens" contact
+✅ "Insurance Services" "New York" "@outlook.com" -linkedin -jobs
+✅ site:.net "Insurance Broker" "Bronx" email
+✅ site:.com "Commercial Insurance Agency" "Staten Island" "@hotmail.com"
+✅ "Property & Casualty Insurance" "NYC" "@gmail.com" -indeed -careers
+✅ site:.org "Insurance Company" "Manhattan" contact
+✅ site:.com "Employee Benefits Insurance" "Greater New York" "@yahoo.com"
+✅ "Risk Management Insurance" "New York" "@outlook.com" -linkedin
+
+Bad queries (DON'T DO THIS):
+❌ site:linkedin.com "Insurance Broker" "New York" "@gmail.com"
+❌ site:zoominfo.com "Insurance Agency" "Manhattan"
+❌ site:apollo.io "Insurance Broker" "NYC"
+❌ intitle:"Insurance" "New York"
+❌ "4" "Brooklyn" "@gmail.com"
+❌ site:.com "company_page" "Insurance"
+
+Example 2 - Input: "real estate brokerage firms", Region: "Chicago"
+B2C Focus: Find real estate company WEBSITES
+Good understanding: This means real estate company websites, not LinkedIn profiles
+✅ site:.com "Real Estate Agency" "Chicago" "@gmail.com"
+✅ site:.org "Real Estate Brokerage" "Loop" contact
+✅ "Commercial Real Estate Firm" "Chicago" "@yahoo.com" -linkedin -jobs
+✅ site:.net "Property Management Company" "Lincoln Park" email
+✅ site:.com "Residential Real Estate" "Wicker Park" "@outlook.com"
+✅ "Real Estate Services" "Chicago" "@gmail.com" -indeed -careers
+✅ site:.org "Realty Company" "Downtown Chicago" contact
+✅ site:.com "Real Estate Firm" "Chicagoland" "@hotmail.com"
+✅ "Property Sales Company" "Illinois" "@yahoo.com" -linkedin
+✅ site:.net "Real Estate Investment Firm" "Chicago" email
+
+Example 3 - Input: "Coffee Shops", Region: "Portland"
+B2C Focus: Find actual coffee shop business websites
+✅ site:.com "Coffee Shop" "Portland" "@gmail.com"
+✅ site:.com "Coffee House" "Downtown Portland" contact
+✅ "Specialty Coffee Roaster" "Portland" "@yahoo.com" -linkedin -jobs
+✅ site:.org "Cafe" "Pearl District" email
+✅ "Independent Coffee Shop" "Portland OR" "@outlook.com" -indeed
+✅ site:.net "Artisan Coffee" "Portland" contact
+✅ site:.com "Coffee Roastery" "Alberta Arts" "@gmail.com"
+✅ "Local Coffee Business" "Portland Metro" "@hotmail.com" -careers -linkedin
+✅ site:.com "Espresso Bar" "Portland" email
+✅ "Coffee Shop" "Oregon" "@yahoo.com" -jobs -indeed
+{context_hint}
+
+OUTPUT FORMAT:
+Return ONLY a JSON array of {top_k} query strings. No explanations, no markdown, no code blocks.
+Just the raw JSON array.
+
+Format: ["query1", "query2", ...]
+
+Generate {top_k} diverse, intelligent queries now:"""
+
+        return prompt
+
+    def _clean_serp_context(self, serp_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Clean garbage from SERP context"""
+
+        business_types = serp_context.get('primary_business_types', [])
+
+        # Filter out garbage patterns
+        garbage_patterns = [
+            r'^\d+$',  # Just numbers like "4"
+            r'^company_page$',  # Metadata
+            r'^@[\w\.-]+$',  # Email domains
+            r'^[A-Z]{2,}$',  # Random acronyms
+            r'^(www|http|https)',  # URLs
+            r'^\W+$',  # Only special characters
+        ]
+
+        cleaned_types = []
+        for btype in business_types:
+            if not btype or len(btype) < 3:
+                continue
+
+            is_garbage = any(re.match(pattern, str(btype), re.IGNORECASE)
+                           for pattern in garbage_patterns)
+
+            if not is_garbage:
+                cleaned_types.append(btype)
+
+        return {
+            'business_types': cleaned_types[:10],  # Top 10 relevant types
+            'is_b2b': serp_context.get('is_b2b', True)
+        }
+
+    def _parse_claude_response(self, response_text: str, expected_count: int) -> List[str]:
+        """Parse Claude's response and extract queries"""
+
+        try:
+            # Remove markdown code blocks if present
+            response_text = re.sub(r'```json\s*|\s*```', '', response_text)
+            response_text = response_text.strip()
+
+            # Try to find JSON array
+            json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
+            if json_match:
+                response_text = json_match.group(0)
+
+            # Parse JSON
+            queries = json.loads(response_text)
+
+            if isinstance(queries, list):
+                # Clean each query
+                cleaned_queries = []
+                for q in queries:
+                    if isinstance(q, str) and len(q.strip()) > 10:
+                        cleaned_queries.append(q.strip())
+
+                return cleaned_queries[:expected_count]
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f"JSON parse error: {e}")
+            self.logger.debug(f"Response text: {response_text[:500]}")
+        except Exception as e:
+            self.logger.error(f"Unexpected error parsing response: {e}")
+
+        return []
+
+    def _validate_queries(self, queries: List[str], expected_count: int) -> List[str]:
+        """Validate and clean queries"""
+
+        valid_queries = []
+        seen = set()
 
         for query in queries:
-            # Check excludes
-            if request.excludes:
-                if any(exclude.lower() in query.lower() for exclude in request.excludes):
-                    continue
+            # Skip duplicates
+            normalized = query.lower().strip()
+            if normalized in seen:
+                continue
 
-            # Check includes (if specified, at least one must be present)
-            if request.includes:
-                if not any(include.lower() in query.lower() for include in request.includes):
-                    # Add the include term if not present
-                    query = f'{query} "{request.includes[0]}"'
+            # Basic validation
+            if len(query) < 15:  # Too short
+                continue
 
-            filtered.append(query)
+            # Check for proper quote usage
+            if '"' not in query:  # No quotes at all
+                continue
 
-        return filtered
+            # Check for garbage patterns
+            if any(garbage in query for garbage in ['undefined', 'null', 'example', 'placeholder']):
+                continue
 
-    def _generate_fallback_queries(self,
-                                   existing_queries: List[str],
-                                   request: QueryRequest,
-                                   context: Dict) -> List[str]:
-        """
-        Generate additional queries if we don't have enough
-        """
-        queries = existing_queries.copy()
+            seen.add(normalized)
+            valid_queries.append(query)
 
-        # Use context to generate more variations
-        email_domains = context['suggested_email_domains']
-        business_types = context['primary_business_types']
-        areas = context['location_areas']
-        variations = context['keyword_variations']
+            if len(valid_queries) >= expected_count:
+                break
 
-        while len(queries) < request.top_k:
-            # Rotate through patterns
-            idx = len(queries) % len(email_domains)
-            email = email_domains[idx]
+        return valid_queries
 
-            business_type = business_types[idx % len(business_types)] if business_types else "company"
-            area = areas[idx % len(areas)] if areas else request.region
-            variation = variations[idx % len(variations)] if variations else request.industry
+    def _generate_fallback_queries(
+        self,
+        industry: str,
+        region: str,
+        top_k: int
+    ) -> List[str]:
+        """Generate basic fallback queries if Claude fails"""
 
-            # Generate different patterns - ALL with quoted emails
-            patterns = [
-                f'"{variation} {business_type}" "{area}" "{email}"',
-                f'site:.com "{variation}" "{area}" "{email}"',
-                f'intitle:"{variation}" "{area}" email "{email}"',
-                f'"{business_type}" "{variation}" "{area}" contact "{email}"'
-            ]
+        self.logger.warning("Using fallback query generation")
 
-            # Use a pattern we haven't used yet
-            query = patterns[len(queries) % len(patterns)]
+        # Extract key terms from industry
+        industry_clean = industry.strip()
 
-            if query not in queries:
-                queries.append(query)
+        # Geographic variations
+        locations = [region]
 
-        return queries
+        # Email domains to rotate
+        email_domains = ["@gmail.com", "@yahoo.com", "@outlook.com", "@hotmail.com"]
 
-    def _create_fallback_queries(self, request: QueryRequest, context: Dict) -> List[str]:
-        """
-        Create basic fallback queries when Claude API fails
-        """
+        # Generate basic queries
         queries = []
+        patterns = [
+            'site:linkedin.com "{industry}" "{location}" "{email}"',
+            '"{industry}" "{location}" "{email}" -jobs',
+            'site:.com "{industry}" "{location}" contact',
+            'site:zoominfo.com "{industry}" "{location}"',
+        ]
 
-        # Use the SERP context even in fallback
-        email_domains = context.get('suggested_email_domains', ['@gmail.com', '@yahoo.com'])
-        areas = context.get('location_areas', [request.region])
-        business_types = context.get('primary_business_types', ['company', 'services'])
-        variations = context.get('keyword_variations', [request.industry])
-
-        for i in range(request.top_k):
+        idx = 0
+        for i in range(top_k):
+            pattern = patterns[i % len(patterns)]
+            location = locations[i % len(locations)]
             email = email_domains[i % len(email_domains)]
-            area = areas[i % len(areas)]
-            business_type = business_types[i % len(business_types)]
-            keyword = variations[i % len(variations)]
 
-            # Mix different patterns - ALL with quoted emails
-            if i % 4 == 0:
-                query = f'site:.com "{keyword} {business_type}" "{area}" "{email}"'
-            elif i % 4 == 1:
-                query = f'"{keyword}" "{area}" "{email}" contact'
-            elif i % 4 == 2:
-                query = f'intitle:"{keyword}" "{area}" email "{email}"'
-            else:
-                query = f'"{business_type}" "{keyword}" "{area}" "{email}"'
-
+            query = pattern.format(
+                industry=industry_clean,
+                location=location,
+                email=email
+            )
             queries.append(query)
 
-        return queries[:request.top_k]
+        return queries[:top_k]
 
-    async def generate_email_optimized_queries(self,
-                                              industry_analysis: IndustryAnalysis,
-                                              geographic_data: GeographicData,
-                                              request: QueryRequest) -> List[str]:
-        """
-        Legacy method - redirects to new intelligent method
-        """
-        return await self.generate_intelligent_queries(request)
+
+# For backwards compatibility
+async def generate_intelligent_queries(
+    industry: str,
+    region: str,
+    top_k: int = 10,
+    serp_context: Optional[Dict[str, Any]] = None
+) -> List[str]:
+    """Convenience function for generating queries"""
+    service = ClaudeService()
+    return await service.generate_queries(industry, region, top_k, serp_context)
