@@ -354,51 +354,84 @@ Generate {top_k} diverse, intelligent queries now:"""
         region: str,
         top_k: int
     ) -> List[str]:
-        """Generate basic fallback queries if Claude fails"""
+        """Generate basic B2C fallback queries if Claude fails"""
 
         self.logger.warning("Using fallback query generation")
 
-        # Extract key terms from industry
+        # Clean industry input
         industry_clean = industry.strip()
+
+        # Try to extract meaningful variations
+        # If input is "Insurance Brokers", variations could be "Insurance Agency", "Insurance Services"
+        variations = [
+            industry_clean,
+            industry_clean.replace("Brokers", "Agency").replace("brokers", "agency"),
+            industry_clean.replace("Brokers", "Services").replace("brokers", "services"),
+            industry_clean.replace("Brokers", "Company").replace("brokers", "company"),
+            industry_clean.replace("Brokers", "Firm").replace("brokers", "firm"),
+        ]
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_variations = []
+        for v in variations:
+            if v not in seen:
+                seen.add(v)
+                unique_variations.append(v)
 
         # Geographic variations
         locations = [region]
+        if "New York" in region:
+            locations.extend(["Manhattan", "Brooklyn", "Queens", "NYC"])
+        elif "Los Angeles" in region or "LA" in region:
+            locations.extend(["Downtown LA", "West LA", "Santa Monica"])
+        elif "Chicago" in region:
+            locations.extend(["Downtown Chicago", "Loop", "North Side"])
+        elif "San Francisco" in region:
+            locations.extend(["Downtown SF", "Mission District", "SOMA"])
 
         # Email domains to rotate
-        email_domains = ["@gmail.com", "@yahoo.com", "@outlook.com", "@hotmail.com"]
+        email_domains = ["@gmail.com", "@yahoo.com", "@outlook.com", "@hotmail.com", "@aol.com"]
 
-        # Generate basic queries
+        # Domain patterns
+        domains = [".com", ".org", ".net"]
+
+        # Generate diverse B2C queries
         queries = []
         patterns = [
-            'site:linkedin.com "{industry}" "{location}" "{email}"',
-            '"{industry}" "{location}" "{email}" -jobs',
-            'site:.com "{industry}" "{location}" contact',
-            'site:zoominfo.com "{industry}" "{location}"',
+            'site:{domain} "{industry}" "{location}" "{email}"',
+            'site:{domain} "{industry}" "{location}" contact',
+            '"{industry}" "{location}" "{email}" -linkedin -jobs',
+            'site:{domain} "{industry}" "{location}" email',
+            '"{industry}" "{location}" "{email}" -indeed -careers',
         ]
 
-        idx = 0
         for i in range(top_k):
             pattern = patterns[i % len(patterns)]
+            industry_var = unique_variations[i % len(unique_variations)]
             location = locations[i % len(locations)]
             email = email_domains[i % len(email_domains)]
+            domain = domains[i % len(domains)]
 
             query = pattern.format(
-                industry=industry_clean,
+                industry=industry_var,
                 location=location,
-                email=email
+                email=email,
+                domain=domain
             )
             queries.append(query)
 
         return queries[:top_k]
 
-
-# For backwards compatibility
-async def generate_intelligent_queries(
-    industry: str,
-    region: str,
-    top_k: int = 10,
-    serp_context: Optional[Dict[str, Any]] = None
-) -> List[str]:
-    """Convenience function for generating queries"""
-    service = ClaudeService()
-    return await service.generate_queries(industry, region, top_k, serp_context)
+    async def generate_intelligent_queries(
+        self,
+        industry: str,
+        region: str,
+        top_k: int = 10,
+        serp_context: Optional[Dict[str, Any]] = None
+    ) -> List[str]:
+        """
+        Alias method for backwards compatibility.
+        Calls generate_queries() internally.
+        """
+        return await self.generate_queries(industry, region, top_k, serp_context)
