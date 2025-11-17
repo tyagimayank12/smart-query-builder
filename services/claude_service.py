@@ -17,7 +17,7 @@ class ClaudeService:
 
     def __init__(self):
         self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        self.model = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+        self.model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
         self.logger = logging.getLogger(__name__)
 
     async def generate_queries(
