@@ -97,7 +97,7 @@ async def build_queries(request: QueryRequest):
         if SERP_ENABLED and serp_service:
             try:
                 logger.info(f"[{request_id}] Fetching SERP context...")
-                serp_context = serp_service.get_industry_context(
+                serp_context = await serp_service.get_intelligent_context(
                     request.industry,
                     request.region
                 )
