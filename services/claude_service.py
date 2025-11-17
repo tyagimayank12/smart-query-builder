@@ -17,7 +17,9 @@ class ClaudeService:
 
     def __init__(self):
         self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        self.model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+        # Use correct model name - claude-sonnet-4-5 is the latest (Sep 2025)
+        # Alternative: claude-sonnet-4 (May 2025) or claude-3-5-sonnet-20241022 (Oct 2024)
+        self.model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4")
         self.logger = logging.getLogger(__name__)
 
     async def generate_queries(
@@ -118,26 +120,28 @@ CRITICAL RULES FOR UNDERSTANDING THE INDUSTRY:
    
    You are searching for ACTUAL BUSINESS WEBSITES (B2C), NOT individual professionals or LinkedIn profiles.
    
-   Pattern A - .com Domain Search with Email (50% of queries):
+   MIX these patterns RANDOMLY - don't use them in sequence:
+   
+   Pattern A - Domain with Email:
    site:.com "Business Type" "Location" "@email.com"
-   Examples:
-   - site:.com "Insurance Agency" "Manhattan" "@gmail.com"
-   - site:.com "Real Estate Brokerage" "Brooklyn" "@yahoo.com"
-   - site:.com "Coffee Shop" "Portland" "@outlook.com"
+   site:.org "Business Type" "Location" "@email.com"
+   site:.net "Business Type" "Location" "@email.com"
    
-   Pattern B - Multiple TLD Search with Contact (30% of queries):
-   site:.org OR site:.net "Business Type" "Location" contact OR email
-   Examples:
-   - site:.org "Insurance Broker" "New York" contact
-   - site:.net "Real Estate Agency" "Queens" email
-   - site:.com "Property Management" "Manhattan" contact
+   Pattern B - Domain with Contact:
+   site:.com "Business Type" "Location" contact
+   site:.org "Business Type" "Location" email
+   site:.net "Business Type" "Location" contact OR email
    
-   Pattern C - Open Web Business Search (20% of queries):
-   "Business Type" "Location" "@email.com" -linkedin -indeed -jobs -careers
-   Examples:
-   - "Insurance Agency" "New York" "@gmail.com" -linkedin -jobs
-   - "Real Estate Brokerage" "Chicago" "@yahoo.com" -indeed -careers
-   - "Coffee Roastery" "Portland" "@outlook.com" -linkedin
+   Pattern C - Open Web with Email:
+   "Business Type" "Location" "@email.com" -linkedin -jobs
+   "Business Type" "Location" "@email.com" -indeed -careers
+   
+   Pattern D - Open Web with Contact:
+   "Business Type" "Location" contact -linkedin
+   "Business Type" "Location" email -jobs -careers
+   
+   CRITICAL: Don't use patterns in order (A, B, C, D). RANDOMIZE them completely.
+   Each query should surprise - vary the domain (.com/.org/.net), location, business type, email domain, and pattern style.
 
 4. **Geographic Intelligence**:
    - If "{region}" is a CITY (like "New York", "Chicago", "Los Angeles"):
@@ -180,11 +184,22 @@ CRITICAL RULES FOR UNDERSTANDING THE INDUSTRY:
 8. **Other Mistakes to AVOID**:
    ❌ Don't append generic words: "Insurance Brokers specialist" 
    ❌ Don't use unsupported operators: intitle:, inurl:, -site:
-   ❌ Don't repeat similar queries (change location AND title AND email)
+   ❌ Don't use patterns in sequence - RANDOMIZE completely
+   ❌ Don't repeat similar queries (change location AND title AND email AND pattern)
    ❌ Don't search for just email domains without context
    ❌ Don't use broken syntax like site:.com without meaningful terms
+   ❌ Don't follow a predictable pattern order - mix it up!
 
-9. **Proper Query Syntax**:
+9. **Randomization is Critical**:
+   - Query 1 might use: site:.org with contact
+   - Query 2 might use: open web with @yahoo.com
+   - Query 3 might use: site:.com with @gmail.com
+   - Query 4 might use: open web with email -linkedin
+   - Query 5 might use: site:.net with @outlook.com
+   
+   NO predictable sequences! Each query should be genuinely different in structure.
+
+10. **Proper Query Syntax**:
    ✅ All phrases must be in quotes: "Insurance Broker" not Insurance Broker
    ✅ Email patterns in quotes: "@gmail.com" not @gmail.com
    ✅ Site operator format: site:linkedin.com OR site:.com
@@ -195,52 +210,56 @@ EXAMPLES TO LEARN FROM:
 
 Example 1 - Input: "Insurance Brokers", Region: "New York"
 B2C Focus: Find insurance agency/brokerage WEBSITES, not individual professionals
-Good queries:
-✅ site:.com "Insurance Agency" "Manhattan" "@gmail.com"
-✅ site:.com "Insurance Brokerage" "Brooklyn" "@yahoo.com"
-✅ site:.org "Independent Insurance Agent" "Queens" contact
-✅ "Insurance Services" "New York" "@outlook.com" -linkedin -jobs
-✅ site:.net "Insurance Broker" "Bronx" email
-✅ site:.com "Commercial Insurance Agency" "Staten Island" "@hotmail.com"
-✅ "Property & Casualty Insurance" "NYC" "@gmail.com" -indeed -careers
-✅ site:.org "Insurance Company" "Manhattan" contact
-✅ site:.com "Employee Benefits Insurance" "Greater New York" "@yahoo.com"
-✅ "Risk Management Insurance" "New York" "@outlook.com" -linkedin
 
-Bad queries (DON'T DO THIS):
-❌ site:linkedin.com "Insurance Broker" "New York" "@gmail.com"
-❌ site:zoominfo.com "Insurance Agency" "Manhattan"
-❌ site:apollo.io "Insurance Broker" "NYC"
-❌ intitle:"Insurance" "New York"
-❌ "4" "Brooklyn" "@gmail.com"
-❌ site:.com "company_page" "Insurance"
+GOOD - Truly randomized patterns:
+✅ "Insurance Agency" "Brooklyn" "@yahoo.com" -linkedin -jobs
+✅ site:.net "Commercial Insurance Broker" "Manhattan" email
+✅ site:.com "Property Insurance" "Queens" "@outlook.com"
+✅ "Independent Insurance Agent" "Staten Island" contact -indeed
+✅ site:.org "Business Insurance Agency" "NYC" "@gmail.com"
+✅ "Employee Benefits Insurance" "Bronx" "@hotmail.com" -careers -linkedin
+✅ site:.com "Insurance Brokerage" "Greater New York" contact
+✅ site:.net "Auto Insurance Agency" "Manhattan" "@yahoo.com"
+✅ "Risk Management Insurance" "Brooklyn" email -jobs
+✅ site:.org "Health Insurance Broker" "Queens" "@outlook.com"
 
-Example 2 - Input: "real estate brokerage firms", Region: "Chicago"
-B2C Focus: Find real estate company WEBSITES
-Good understanding: This means real estate company websites, not LinkedIn profiles
-✅ site:.com "Real Estate Agency" "Chicago" "@gmail.com"
-✅ site:.org "Real Estate Brokerage" "Loop" contact
-✅ "Commercial Real Estate Firm" "Chicago" "@yahoo.com" -linkedin -jobs
-✅ site:.net "Property Management Company" "Lincoln Park" email
-✅ site:.com "Residential Real Estate" "Wicker Park" "@outlook.com"
-✅ "Real Estate Services" "Chicago" "@gmail.com" -indeed -careers
-✅ site:.org "Realty Company" "Downtown Chicago" contact
-✅ site:.com "Real Estate Firm" "Chicagoland" "@hotmail.com"
-✅ "Property Sales Company" "Illinois" "@yahoo.com" -linkedin
-✅ site:.net "Real Estate Investment Firm" "Chicago" email
+Notice: Each query has DIFFERENT pattern structure, not following A->B->C->D sequence.
+
+BAD - Following rigid patterns (DON'T DO THIS):
+❌ Always starting with site:.com "@gmail.com"
+❌ Then site:.org contact
+❌ Then open web "@yahoo.com"
+❌ Predictable sequence that repeats
+
+Example 2 - Input: "E-commerce", Region: "New York"
+B2C Focus: Find online store/marketplace WEBSITES
+
+GOOD - Random patterns:
+✅ site:.org "Online Retailer" "Manhattan" "@gmail.com"
+✅ "E-commerce Platform" "Brooklyn" contact -linkedin
+✅ site:.com "Digital Marketplace" "NYC" email
+✅ "Online Store" "Queens" "@yahoo.com" -jobs -indeed
+✅ site:.net "Web Shop" "Staten Island" "@outlook.com"
+✅ "Internet Retailer" "Bronx" contact -careers
+✅ site:.com "E-commerce Business" "Greater New York" "@hotmail.com"
+✅ site:.org "Online Shopping Site" "Manhattan" email
+✅ "Digital Store" "Brooklyn" "@gmail.com" -linkedin -jobs
+✅ site:.net "Web Marketplace" "Queens" contact
 
 Example 3 - Input: "Coffee Shops", Region: "Portland"
 B2C Focus: Find actual coffee shop business websites
-✅ site:.com "Coffee Shop" "Portland" "@gmail.com"
+
+GOOD - Randomized:
 ✅ site:.com "Coffee House" "Downtown Portland" contact
-✅ "Specialty Coffee Roaster" "Portland" "@yahoo.com" -linkedin -jobs
-✅ site:.org "Cafe" "Pearl District" email
-✅ "Independent Coffee Shop" "Portland OR" "@outlook.com" -indeed
-✅ site:.net "Artisan Coffee" "Portland" contact
-✅ site:.com "Coffee Roastery" "Alberta Arts" "@gmail.com"
-✅ "Local Coffee Business" "Portland Metro" "@hotmail.com" -careers -linkedin
-✅ site:.com "Espresso Bar" "Portland" email
-✅ "Coffee Shop" "Oregon" "@yahoo.com" -jobs -indeed
+✅ "Specialty Coffee Roaster" "Pearl District" "@yahoo.com" -linkedin
+✅ site:.org "Artisan Cafe" "Alberta Arts" email
+✅ "Independent Coffee Shop" "Portland" "@outlook.com" -jobs
+✅ site:.net "Coffee Roastery" "Northwest Portland" "@gmail.com"
+✅ "Local Coffee Business" "Portland Metro" contact -careers -linkedin
+✅ site:.com "Espresso Bar" "Southeast Portland" "@hotmail.com"
+✅ "Specialty Coffee" "Oregon" email -indeed
+✅ site:.org "Coffee Shop" "Portland" "@yahoo.com"
+✅ "Craft Coffee Roaster" "Downtown PDX" contact -jobs
 {context_hint}
 
 OUTPUT FORMAT:
