@@ -7,6 +7,7 @@ import anthropic
 import json
 import logging
 import re
+import asyncio
 from typing import List, Dict, Any, Optional
 import os
 
@@ -423,15 +424,62 @@ Generate {top_k} diverse, intelligent queries now:"""
 
         return queries[:top_k]
 
-    async def generate_intelligent_queries(
+    def generate_intelligent_queries(
         self,
-        industry: str,
-        region: str,
+        industry: str = None,
+        region: str = None,
         top_k: int = 10,
-        serp_context: Optional[Dict[str, Any]] = None
+        serp_context: Optional[Dict[str, Any]] = None,
+        **kwargs  # Catch any extra arguments
     ) -> List[str]:
         """
-        Alias method for backwards compatibility.
-        Calls generate_queries() internally.
+        Synchronous wrapper for generate_queries.
+        Bulletproof version that handles any calling pattern.
+
+        Usage (all these work):
+            service.generate_intelligent_queries("Insurance", "New York", 10)
+            service.generate_intelligent_queries(industry="Insurance", region="New York", top_k=10)
+            service.generate_intelligent_queries("Insurance", region="New York")
         """
-        return await self.generate_queries(industry, region, top_k, serp_context)
+        # Handle missing required parameters
+        if industry is None:
+            industry = kwargs.get('industry', 'General Business')
+            self.logger.warning(f"Industry not provided, using default: {industry}")
+
+        if region is None:
+            region = kwargs.get('region', 'United States')
+            self.logger.warning(f"Region not provided, using default: {region}")
+
+        # Ensure strings
+        industry = str(industry)
+        region = str(region)
+        top_k = int(top_k) if top_k else 10
+
+        self.logger.info(f"Generating queries: industry='{industry}', region='{region}', top_k={top_k}")
+
+        try:
+            # Try to use existing event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Create a new loop in a thread if current loop is running
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(
+                        asyncio.run,
+                        self.generate_queries(industry, region, top_k, serp_context)
+                    )
+                    return future.result()
+            else:
+                # Use existing loop
+                return loop.run_until_complete(
+                    self.generate_queries(industry, region, top_k, serp_context)
+                )
+        except RuntimeError:
+            # No event loop exists, create one
+            return asyncio.run(
+                self.generate_queries(industry, region, top_k, serp_context)
+            )
+        except Exception as e:
+            self.logger.error(f"Error in generate_intelligent_queries: {e}", exc_info=True)
+            # Fall back to sync generation
+            return self._generate_fallback_queries(industry, region, top_k)
